@@ -9,7 +9,6 @@ A lightweight button management library for embedded systems (ESP32, STM32, Ardu
 * Supports short press, long press, and combined logic
 * Handles asynchronous debouncing internally
 * Provides flags for state checking and optional callbacks
-* Works on bare metal or with async frameworks (like async_await)
 * Compatible with multiple embedded platforms
 * Fully non-blocking, no threads or RTOS required
 
