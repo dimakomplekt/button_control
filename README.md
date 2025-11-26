@@ -111,4 +111,4 @@ if (long_pressed_logic_flag)
 
 
 
-🫵 If you want to improve the library, fix bugs, or add callbacks, you’re encouraged to fork, debug, and PR. Contributions welcome!
+🫵 You are welcome to help us make this library better!
