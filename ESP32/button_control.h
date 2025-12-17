@@ -11,10 +11,18 @@
 // Instruction - at the end of the file.
 
 // P.S. I love my namings, even if they are long. Cause i'm a user of the IDE with autofill XD.
-// And this naming helps me to keep projects readable.
+// And this naming approach helps me to keep projects readable.
 // But you can rename whatever you want to rename. BY AND FOR YOURSELF. 
 
 // =========================================================================================== INFO
+
+
+// =========================================================================================== INSTRUCTION
+
+
+
+// =========================================================================================== INSTRUCTION
+
 
 #ifndef BUTTON_CONTROL_H
 #define BUTTON_CONTROL_H
@@ -43,18 +51,6 @@
 // =========================================================================================== DEFINES
 
 
-// =========================================================================================== EXT CONST
-
-
-// =========================================================================================== EXT CONST
-
-
-// =========================================================================================== EXT VAR
-
-
-// =========================================================================================== EXT VAR
-
-
 // =========================================================================================== EXT ENUMS
 
 // Button types structure
@@ -68,10 +64,26 @@ typedef enum {
 // =========================================================================================== EXT ENUMS
 
 
-
 // =========================================================================================== EXT STRUCTS
 
-// Button structure
+// Structure for onetime per every reinitialization control functions call
+typedef struct
+{
+
+    bool onetime_press_flag_control_first_call;
+    bool multiple_press_flag_control_first_call;
+    bool longtime_press_flag_control_first_call;
+    bool infinite_press_flag_control_first_call;
+    bool onetime_press_callback_control_first_call;
+    bool multiple_press_callback_control_first_call;
+    bool longtime_press_callback_control_first_call;
+    bool infinite_press_callback_control_first_call;
+
+} ctx_error_handlers_ctx;
+
+
+// Main button structure
+// Stores the whole button context data
 typedef struct
 {
     gpio_num_t PIN;                                 // Pin for button control
@@ -84,7 +96,7 @@ typedef struct
     bool but_snapshot;                              // Flag for button long-time pressing control
 
     bool one_time_block;                            // Flag for longtime-time press block from onetime press 
-    bool mt_permission;                       // Flag for one-time press block from longtime press  
+    bool mt_permission;                             // Flag for one-time press block from longtime press  
 
     bool long_time_await_end;
 
@@ -101,6 +113,11 @@ typedef struct
     void (*infinite_press_callback)(void);          // Callback function for infinite press
     bool infinite_press_permission;                 // Flag for the callback use
 
+    // 1st call error handlers flags
+    ctx_error_handlers_ctx error_handlers_ctx;
+
+
+    // Async awaits contexts 
     async_await_ctx DEBOUNCE_AWAIT;                 // Async await context for debounce await
     async_await_ctx MULTIPRESS_AWAIT;               // Async await context for multipress await reset
     async_await_ctx LONG_TIME_PRESS_AWAIT;          // Async await context for multipress await reset
@@ -130,6 +147,10 @@ button_ctx button_initialization(gpio_num_t PIN, gpio_pull_mode_t pull_mode, but
 // Can't be used with multipress logic (use flag_control_by_but_onetime_press(&button_1, my_flag, 1)
 // instead)
 //
+// Can't be used with flag_control_by_but_infinite_press
+//
+// Cant't be used with FIX buttons (cause it's weird - but you can rewrite logic, if it's cool for you)
+//
 // !!! WARNING !!!
 //
 // Call as: flag_control_by_but_onetime_press(&button_1, my_flag);
@@ -140,12 +161,22 @@ void flag_control_by_but_onetime_press(button_ctx *button, bool* flag);
 // Function: flag_control_by_but_onetime_press
 // Purpose: Reverse the flag parameter bool value by the short button press and save this flag state
 // by the selected button and flag with debounce async await. 
+//
+// !!! WARNING !!!
+//
+// Can't be used with onetime press logic
+//
+// Can't be used with flag_control_by_but_infinite_press
+//
+// Cant't be used with FIX buttons (cause it's weird - but you can rewrite logic, if it's cool for you)
+//
+// !!! WARNING !!!
+// 
 // Call as: flag_control_by_but_onetime_press(&button_1, my_flag, 3);
 // Than check the flag in if-else, like: if (my flag) { ... }
 // You are able to check several flags by several multipress controls with DIFFERENT presses_quantity 
 void flag_control_by_but_multiple_press(button_ctx *button, bool* flag, uint8_t presses_quantity);
 
-void multitime_press_counter_control(button_ctx *button);
 
 // Function: flag_control_by_but_onetime_press
 // Purpose: Reverse the flag parameter bool value by the longtime button press (3 seconds) and save this flag state
@@ -154,6 +185,8 @@ void multitime_press_counter_control(button_ctx *button);
 // !!! WARNING !!!
 //
 // Can't be used with flag_control_by_but_infinite_press
+//
+// Cant't be used with FIX buttons (cause it's weird - but you can rewrite logic, if it's cool for you)
 //
 // !!! WARNING !!!
 // 
@@ -215,9 +248,3 @@ void callback_control_by_but_infinite_press(button_ctx *button, unsigned int rep
 
 
 #endif // BUTTON_CONTROL_H
-
-// =========================================================================================== INSTRUCTION
-
-
-
-// =========================================================================================== INSTRUCTION

@@ -1,26 +1,6 @@
-// =========================================================================================== INFO
-
-// ESP32 library for the easy buttons control (С-File)
-
-// Author: dimakomplekt
-
-// Description: Button control with async_await for debounce / awaits, using pure C for embedded.
-// Includes logic for buttons with / without fixation - onetime press / multiple press / 
-// long-time press / infinite press.
-
-// Instruction - at the end of the file.
-
-// P.S. I love my namings, even if they are long. Cause i'm a user of the IDE with autofill XD.
-// And this naming helps me to keep projects readable.
-// But you can rename whatever you want to rename. BY AND FOR YOURSELF. 
-
-// =========================================================================================== INFO
-
-
-
 // =========================================================================================== IMPORT
 
-#include "button_contol.h"
+#include "button_control.h"
 #include <assert.h>
 
 // =========================================================================================== IMPORT
@@ -123,6 +103,18 @@ button_ctx button_initialization(gpio_num_t PIN, gpio_pull_mode_t pull_mode, but
     new_button.infinite_press_callback = NULL;
     new_button.infinite_press_permission = false;
 
+
+    // 1st call error handlers flags initialization / reinitialization
+    new_button.error_handlers_ctx.onetime_press_flag_control_first_call = true;
+    new_button.error_handlers_ctx.multiple_press_flag_control_first_call = true;
+    new_button.error_handlers_ctx.longtime_press_flag_control_first_call = true;
+    new_button.error_handlers_ctx.infinite_press_flag_control_first_call = true;
+    new_button.error_handlers_ctx.onetime_press_callback_control_first_call = true;
+    new_button.error_handlers_ctx.multiple_press_callback_control_first_call = true;
+    new_button.error_handlers_ctx.longtime_press_callback_control_first_call = true;
+    new_button.error_handlers_ctx.infinite_press_callback_control_first_call = true;
+
+
     // Awaits initialization
     new_button.DEBOUNCE_AWAIT = async_await_ctx_default();
     new_button.MULTIPRESS_AWAIT = async_await_ctx_default();
@@ -133,20 +125,83 @@ button_ctx button_initialization(gpio_num_t PIN, gpio_pull_mode_t pull_mode, but
 }
 
 
+// =========================================================================================== Button control APIs realization
 
-// Button control APIs realization
+// =========================================================================================== Helper-functions for button error handling
 
-// Flags control
+bool button_context_check(button_ctx *button)
+{
+    bool check_status = true;
+
+    // Button ctx initialization check
+    if (button == NULL)
+    {
+        fprintf(stderr, "[ERROR] Button context at %p is NULL!\n", (void*)button);
+        check_status = false;
+    }
+    // Button ctx PIN number check
+    if (button->PIN == GPIO_NUM_NC)
+    {
+        fprintf(stderr, "[ERROR] Button context at %p has unitialized PIN!\n", (void*)button);
+        check_status = false;
+    }
+
+    return check_status;
+}
+
+
+bool button_type_check(button_ctx *button, button_type expected_type)
+{
+    bool check_status = true;
+
+    // Expected button type check
+    if (button->type != expected_type)
+    {
+        fprintf(stderr, "[ERROR] Button context at %p has wrong type! Expected: %d, Actual: %d\n", 
+            (void*)(button), expected_type, button->type);
+
+        check_status = false;
+    }
+
+    return check_status;
+}
+
+// =========================================================================================== Helper-functions for button error handling
+
+
+// =========================================================================================== Flags control
 
 // Switch the flag value by the short BUT press (flag holds the switched value, until the BUT pressed
 // once again)
 void flag_control_by_but_onetime_press(button_ctx *button, bool* flag)
 {
-    // Error handler
-    if (button->PIN == GPIO_NUM_NC) return;
+    // First call error handler
+    if (button->error_handlers_ctx.onetime_press_flag_control_first_call == true)
+    {
+        // Wrong button ctx 
+        if (!button_context_check(button)) return;
+        // Wrong button type (onetime_press only for NO_FIX buttons)
+        if (!button_type_check(button, NO_FIX)) return;
 
-    // No option to work for button with fixation
-    if (button->type == FIX) return;
+        button->error_handlers_ctx.onetime_press_flag_control_first_call = false;
+    }
+
+    // Simultanious work with multiple press block
+    if (!button->error_handlers_ctx.multiple_press_flag_control_first_call ||
+        !button->error_handlers_ctx.multiple_press_callback_control_first_call)
+    {
+        fprintf(stderr, "[ERROR] button_ctx at %p: onetime_press and  multipress control called simultaniously!\n", (void*)button);
+        assert(0);
+    }
+
+    // Simultanious work with infinite press block
+    if (!button->error_handlers_ctx.infinite_press_flag_control_first_call ||
+        !button->error_handlers_ctx.infinite_press_callback_control_first_call)
+    {
+        fprintf(stderr, "[ERROR] button_ctx at %p: onetime and infinite press control called simultaniously!\n", (void*)button);
+        assert(0);
+    }
+    
 
     // BUT state
     int but_level = fast_but_gpio_read(button);
@@ -182,9 +237,6 @@ void flag_control_by_but_multiple_press_inside(button_ctx *button, bool* flag, u
 {
     // Logic error handler
     if (presses_quantity < 1) return;
-
-    // Error handler
-    if (button->PIN == GPIO_NUM_NC) return;
 
     // Update the maximum presses quantity value
     if (presses_quantity > button->max_presses_quantity) button->max_presses_quantity = presses_quantity;
@@ -227,13 +279,22 @@ void flag_control_by_but_multiple_press_inside(button_ctx *button, bool* flag, u
             if (button->presses_counter == presses_quantity)
             {     
                 *flag = !*flag; // Reverse the flag if the timer ends up
-                button->presses_counter = 0;
+
+                // ensure all related awaits are stopped
+                end_await(&button->DEBOUNCE_AWAIT);
+                end_await(&button->LONG_TIME_PRESS_AWAIT);
                 end_await(&button->MULTIPRESS_AWAIT);
+
+                button->presses_counter = 0;
             }
             if (button->presses_counter > button->max_presses_quantity)
             {     
-                button->presses_counter = 0;
+                // stop awaits when aborting multipress sequence
+                end_await(&button->DEBOUNCE_AWAIT);
+                end_await(&button->LONG_TIME_PRESS_AWAIT);
                 end_await(&button->MULTIPRESS_AWAIT);
+
+                button->presses_counter = 0;
             }
         }
     }
@@ -247,8 +308,33 @@ void flag_control_by_but_multiple_press_inside(button_ctx *button, bool* flag, u
 
 void flag_control_by_but_multiple_press(button_ctx *button, bool* flag, uint8_t presses_quantity)
 {
-    if (button->PIN == GPIO_NUM_NC || presses_quantity < 1)
-        return;
+    // First call error handler
+    if (button->error_handlers_ctx.multiple_press_flag_control_first_call == true)
+    {
+        // Wrong button ctx 
+        if (!button_context_check(button)) return;
+        // Wrong button type (onetime_press only for NO_FIX buttons)
+        if (!button_type_check(button, NO_FIX)) return;
+
+        button->error_handlers_ctx.multiple_press_flag_control_first_call = false;
+    }
+
+    // Simultanious work with onetime press block
+    if (!button->error_handlers_ctx.onetime_press_flag_control_first_call ||
+        !button->error_handlers_ctx.onetime_press_callback_control_first_call)
+    {
+        fprintf(stderr, "[ERROR] button_ctx at %p: multipress and onetime_press control called simultaniously!\n", (void*)button);
+        assert(0);
+    }
+
+    // Simultanious work with infinite press block
+    if (!button->error_handlers_ctx.infinite_press_flag_control_first_call ||
+        !button->error_handlers_ctx.infinite_press_callback_control_first_call)
+    {
+        fprintf(stderr, "[ERROR] button_ctx at %p: multiple and infinite press control called simultaniously!\n", (void*)button);
+        assert(0);
+    }
+    
 
     // Проверяем, подходит ли текущее количество нажатий под заданное условие
     bool valid_press_count = false;
@@ -263,16 +349,29 @@ void flag_control_by_but_multiple_press(button_ctx *button, bool* flag, uint8_t 
         flag_control_by_but_multiple_press_inside(button, flag, presses_quantity);
 }
 
+
 // Switch the flag value by the long BUT press (flag holds the switched value, until the BUT pressed
 // once again)
 void flag_control_by_but_longtime_press(button_ctx *button, bool* flag)
 {
-    // Error handler
-    if (button->PIN == GPIO_NUM_NC) return;
+    // First call error handler
+    if (button->error_handlers_ctx.longtime_press_flag_control_first_call == true)
+    {
+        // Wrong button ctx 
+        if (!button_context_check(button)) return;
+        // Wrong button type (onetime_press only for NO_FIX buttons)
+        if (!button_type_check(button, NO_FIX)) return;
 
-    // No option to work for button with fixation
-    if (button->type == FIX) return;
+        button->error_handlers_ctx.longtime_press_flag_control_first_call = false;
+    }
 
+    // Simultanious work with infinite press block
+    if (!button->error_handlers_ctx.infinite_press_flag_control_first_call ||
+        !button->error_handlers_ctx.infinite_press_callback_control_first_call)
+    {
+        fprintf(stderr, "[ERROR] button_ctx at %p: longtime and infinite press control called simultaniously!\n", (void*)button);
+        assert(0);
+    }
 
     // BUT state
     int but_level = fast_but_gpio_read(button);
@@ -294,7 +393,12 @@ void flag_control_by_but_longtime_press(button_ctx *button, bool* flag)
         // Wait 3 seconds
         if (async_await(&button->LONG_TIME_PRESS_AWAIT, 3, TIME_UNIT_S, false))
         {
-            *flag = !*flag; // Flag switch
+            if (!button->one_time_block) *flag = !*flag; // Flag switch
+
+            // stop other awaits that might interfere
+            end_await(&button->DEBOUNCE_AWAIT);
+            end_await(&button->MULTIPRESS_AWAIT);
+
             button->long_time_await_end = true;
             button->one_time_block = true;
         }
@@ -326,9 +430,47 @@ void flag_control_by_but_longtime_press(button_ctx *button, bool* flag)
 // flag return to the first value if button ain't pressed no more)
 void flag_control_by_but_infinite_press(button_ctx *button, bool* flag)
 {
+    // First call error handler
+    if (button->error_handlers_ctx.infinite_press_flag_control_first_call == true)
+    {
+        // Wrong button ctx 
+        if (!button_context_check(button)) return;
 
-    // Error handler
-    if (button->PIN == GPIO_NUM_NC) return;
+        // Could work with any button type
+        if (button->type != NO_FIX && button->type != FIX)
+        {
+            fprintf(stderr, "[ERROR] Button context at %p has wrong type! Expected: %d or %d, Actual: %d\n",
+                (void*)(button), NO_FIX, FIX, button->type);
+
+            return;
+        }
+
+        button->error_handlers_ctx.infinite_press_flag_control_first_call = false;
+    }
+
+    // Simultanious work with onetime press block
+    if (!button->error_handlers_ctx.onetime_press_flag_control_first_call ||
+        !button->error_handlers_ctx.onetime_press_callback_control_first_call)
+    {
+        fprintf(stderr, "[ERROR] button_ctx at %p: infinite and onetime_press control called simultaniously!\n", (void*)button);
+        assert(0);
+    }
+
+    // Simultanious work with multiple press block
+    if (!button->error_handlers_ctx.multiple_press_flag_control_first_call ||
+        !button->error_handlers_ctx.multiple_press_callback_control_first_call)
+    {
+        fprintf(stderr, "[ERROR] button_ctx at %p: infinite and  multipress control called simultaniously!\n", (void*)button);
+        assert(0);
+    }
+
+    // Simultanious work with longtime press block
+    if (!button->error_handlers_ctx.longtime_press_flag_control_first_call ||
+        !button->error_handlers_ctx.longtime_press_callback_control_first_call)
+    {
+        fprintf(stderr, "[ERROR] button_ctx at %p: infinite and longtime press control called simultaniously!\n", (void*)button);
+        assert(0);
+    }
 
     // BUT state
     int but_level = fast_but_gpio_read(button);
@@ -360,9 +502,9 @@ void flag_control_by_but_infinite_press(button_ctx *button, bool* flag)
     }  
 }
 
+// =========================================================================================== Flags control
 
-// Callbacks control
-// !!! NEED TO REBUILD LOGIC TO NEW VERSION LIKE IN THE FLAGS CONTROL !!!
+// =========================================================================================== Callbacks control
 
 // Call the callback function by the short BUT press with specified repeats quantity 
 void callback_control_by_but_onetime_press(button_ctx *button, unsigned int repeats)
@@ -370,12 +512,17 @@ void callback_control_by_but_onetime_press(button_ctx *button, unsigned int repe
     // Error handler
     if (button->PIN == GPIO_NUM_NC) return;
 
+    // No option to work for button with fixation
+    if (button->type == FIX) return;
+
     // BUT state
     int but_level = fast_but_gpio_read(button);
 
     if (!button->but_pressed && but_level)
     {
-        // Flag switch after debounce
+        button->one_time_block = false; // Reset the timers for longtime check
+
+        // Callback after debounce
         if (async_await(&button->DEBOUNCE_AWAIT, 3, TIME_UNIT_MS, false))
         {
             button->but_pressed = true;
@@ -384,23 +531,23 @@ void callback_control_by_but_onetime_press(button_ctx *button, unsigned int repe
     }
     // Reset for the next press if but was pressed, mt_permission was obtained
     // and user don't hold the button no more.
-    else if (button->but_pressed && button->mt_permission && !but_level)
+    else if (button->but_pressed && button->mt_permission && !button->one_time_block && !but_level)
     {
         if (button->onetime_press_callback)
         {
             if (repeats != LOOP_PERFORMANCE)
-            {
                 for (unsigned int i = 0; i < repeats; i++)
-                {
                     button->onetime_press_callback();
-                }               
-            }
-            else button->onetime_press_callback();
+                    
+            else
+                button->onetime_press_callback();
         }
 
         end_await(&button->DEBOUNCE_AWAIT); // Stop await
-        
+        end_await(&button->LONG_TIME_PRESS_AWAIT);
+
         button->but_pressed = false; // Reset for the next call
+        button->one_time_block = true;
     }
 }
 
@@ -414,55 +561,80 @@ void callback_control_by_but_multiple_press(button_ctx *button, uint8_t presses_
     // Error handler
     if (button->PIN == GPIO_NUM_NC) return;
 
-    // BUT state
+    // Update the maximum presses quantity value
+    if (presses_quantity > button->max_presses_quantity) button->max_presses_quantity = presses_quantity;
+
+    // BUT state read
     int but_level = fast_but_gpio_read(button);
 
     // One time press check
     if (!button->but_pressed && but_level)
     {
-        // Flag switch after debounce
+        // Debounce
         if (async_await(&button->DEBOUNCE_AWAIT, 3, TIME_UNIT_MS, false))
         {
-            button->presses_counter += 1; // Increment the presses counter
-            reboot_await(&button->MULTIPRESS_AWAIT, 3, TIME_UNIT_S); // Reboot the multipress await 
+            button->mt_permission = true;
             button->but_pressed = true; // Exit from this if-condition, until the next but press
-            button->mt_permission = true; // Reset by the press if earlier flag blocked by long time press
+
+            reboot_await(&button->MULTIPRESS_AWAIT, 1, TIME_UNIT_S); // Reboot the multipress await
         }
     }
-    // Start multipress await only if the presses counter > 0
-    else if (button->presses_counter > 0)
+
+    // On release increment counter
+    if (button->but_pressed && !but_level)
     {
-        if (async_await(&button->MULTIPRESS_AWAIT, 3, TIME_UNIT_S, true))
+        button->presses_counter += 1; // Increment the presses counter
+        button->but_pressed = false; // Set the permission for the next press
+
+        end_await(&button->DEBOUNCE_AWAIT);
+        end_await(&button->MULTIPRESS_AWAIT);
+        end_await(&button->LONG_TIME_PRESS_AWAIT);
+    }
+
+    // Start multipress await only if the presses counter > 0
+    if (button->presses_counter > 0 && button->mt_permission && !button->but_pressed)
+    {
+        async_await(&button->MULTIPRESS_AWAIT, 1, TIME_UNIT_S, true);
+
+        if (button->MULTIPRESS_AWAIT.end_flag)
         {
             if (button->presses_counter == presses_quantity)
             {
                 if (button->multiple_press_callback)
                 {
                     if (repeats != LOOP_PERFORMANCE)
-                    {
                         for (unsigned int i = 0; i < repeats; i++)
-                        {
                             button->multiple_press_callback();
-                        }               
-                    }
-                    else button->multiple_press_callback();
+                    else
+                        button->multiple_press_callback();
                 }
+
+                // stop all related awaits when action executed
+                end_await(&button->DEBOUNCE_AWAIT);
+                end_await(&button->LONG_TIME_PRESS_AWAIT);
+                end_await(&button->MULTIPRESS_AWAIT);
+
+                // Reset the presses counter after MULTIPRESS_AWAIT ending
+                button->presses_counter = 0;
             }
-    
-            // Reset the presses counter after MULTIPRESS_AWAIT ending
-            button->presses_counter = 0;
+            if (button->presses_counter > button->max_presses_quantity)
+            {
+                // abort sequence: stop awaits
+                end_await(&button->DEBOUNCE_AWAIT);
+                end_await(&button->LONG_TIME_PRESS_AWAIT);
+                end_await(&button->MULTIPRESS_AWAIT);
+
+                button->presses_counter = 0;
+            }
         }
     }
-    // Reset for the next press if but was pressed, mt_permission was obtained
-    // and user don't hold the button no more.
-    else if (button->but_pressed && button->mt_permission && !but_level)
-    {
-        end_await(&button->DEBOUNCE_AWAIT);
-        end_await(&button->MULTIPRESS_AWAIT);
 
-        button->but_pressed = false; // Set the permission for the next press
+    if (!button->mt_permission && button->long_time_await_end)
+    {
+        button->presses_counter = 0;
+        end_await(&button->MULTIPRESS_AWAIT);
     }
-} 
+}
 
 
 // Calls the callback function by the long BUT press with specified repeats quantity
@@ -471,55 +643,78 @@ void callback_control_by_but_longtime_press(button_ctx *button, unsigned int rep
     // Error handler
     if (button->PIN == GPIO_NUM_NC) return;
 
+    // No option to work for button with fixation
+    if (button->type == FIX) return;
+
     // BUT state
     int but_level = fast_but_gpio_read(button);
 
-    if (!button->but_pressed && but_level)
+    if (!button->but_long_pressed && but_level)
     {
-        // Flag switch after debounce
+        // Debounce
         if (async_await(&button->DEBOUNCE_AWAIT, 3, TIME_UNIT_MS, false))
-        {   
-            button->but_pressed = true;
+        {
+            button->but_long_pressed = true;
         }
     }
     // If we got the debounce flag and button still pressed
-    else if (button->but_pressed && but_level)
+    else if (button->but_long_pressed && but_level)
     {
-        // Wait 3 seconds
+        button->one_time_block = false; // Reset the timers for longtime check
+        button->mt_permission = false; // Block the one time press logic
+
+        // Wait LONG press time
         if (async_await(&button->LONG_TIME_PRESS_AWAIT, 3, TIME_UNIT_S, false))
         {
             button->long_time_press_permission = true;
-            button->mt_permission = false; // Block the one time press logic
+            button->long_time_await_end = true;
+            button->one_time_block = true;
         }
     }
-    else if (button->long_time_press_permission)
+
+    if (button->long_time_await_end && but_level)
+    {
+        button->but_long_pressed = false;
+
+        end_await(&button->LONG_TIME_PRESS_AWAIT);
+        end_await(&button->DEBOUNCE_AWAIT);
+    }
+
+    // Execute callback when permission is granted
+    if (button->long_time_press_permission)
     {
         if (button->long_time_press_callback)
         {
             if (repeats != LOOP_PERFORMANCE)
-            {
                 for (unsigned int i = 0; i < repeats; i++)
-                {
                     button->long_time_press_callback();
-                }     
-                
-                button->long_time_press_permission = false;
-            }
-            else button->long_time_press_callback();
+            else
+                button->long_time_press_callback();
+
+            // stop awaits after handling long press action
+            end_await(&button->LONG_TIME_PRESS_AWAIT);
+            end_await(&button->DEBOUNCE_AWAIT);
+            end_await(&button->MULTIPRESS_AWAIT);
+
+            button->long_time_press_permission = false;
         }
     }
-    // Reset for the next press if button was pressed and user don't hold the button no more.
-    else if (button->but_pressed && !but_level)
-    {
-        end_await(&button->LONG_TIME_PRESS_AWAIT);
-        end_await(&button->DEBOUNCE_AWAIT);
 
-        button->but_pressed = false;
-    }  
+    // Reset for the next press if button was pressed and user don't hold the button no more.
+    if (button->long_time_await_end && !but_level)
+    {
+        button->mt_permission = false;
+        button->long_time_await_end = false;
+    }
+    else if (!button->long_time_await_end && !but_level)
+    {
+        button->mt_permission = true;
+        button->long_time_await_end = false;
+    }
 }
 
 
-// Calls the callback function by the long BUT press with specified repeats quantity
+// Calls the callback function by the infinite BUT press with specified repeats quantity
 void callback_control_by_but_infinite_press(button_ctx *button, unsigned int repeats)
 {
     // Error handler
@@ -530,16 +725,19 @@ void callback_control_by_but_infinite_press(button_ctx *button, unsigned int rep
 
     if (!button->but_pressed && but_level)
     {
-        // Flag switch after debounce
+        // Save the flag value snapshot (not used for callback but keep behaviour)
+        button->but_snapshot = false;
+
+        // Debounce
         if (async_await(&button->DEBOUNCE_AWAIT, 3, TIME_UNIT_MS, false))
-        {   
+        {
             button->but_pressed = true;
         }
     }
     // If we got the debounce flag and button still pressed
     else if (button->but_pressed && but_level)
     {
-        // Wait 3 seconds
+        // Wait LONG press time
         if (async_await(&button->LONG_TIME_PRESS_AWAIT, 3, TIME_UNIT_S, false))
         {
             button->infinite_press_permission = true;
@@ -551,15 +749,16 @@ void callback_control_by_but_infinite_press(button_ctx *button, unsigned int rep
         if (button->infinite_press_callback)
         {
             if (repeats != LOOP_PERFORMANCE)
-            {
                 for (unsigned int i = 0; i < repeats; i++)
-                {
                     button->infinite_press_callback();
-                }     
-                
-                button->infinite_press_permission = false;
-            }
-            else button->infinite_press_callback();
+            else
+                button->infinite_press_callback();
+
+            // Stop awaits that were used to detect and allow infinite action
+            end_await(&button->LONG_TIME_PRESS_AWAIT);
+            end_await(&button->DEBOUNCE_AWAIT);
+
+            button->infinite_press_permission = false;
         }
     }
     // Reset for the next press if button was pressed and user don't hold the button no more.
@@ -571,258 +770,11 @@ void callback_control_by_but_infinite_press(button_ctx *button, unsigned int rep
         end_await(&button->DEBOUNCE_AWAIT);
 
         button->but_pressed = false;
-    }  
+    }
 }
 
+// =========================================================================================== Callbacks control
+
+// =========================================================================================== 
 
 // =========================================================================================== API REALIZATION
-
-
-// =========================================================================================== USING EXAMPLES SECTION
-
-// =========================================================================================== LED CONTROL BY BUTTON PRESSES
-
-/*
-
-// INCLUDES:
-#include <stdio.h>
-#include "driver/gpio.h"
-
-#include "esp_rom_sys.h"
-#include "esp_timer.h" // esp_timer_get_time()
-#include "soc/rtc.h" // esp_cpu_get_cycle_count()
-#include "esp_cpu.h"
-
-#include "soc/gpio_reg.h"
-#include "soc/gpio_struct.h"
-
-#include <time.h>
-
-#include <inttypes.h>
-
-#include "driver/ledc.h"
-
-
-// Async delay library
-#include <my_libs/async_await/async_await.h>
-
-// Button control library
-#include <my_libs/button_control/button_contol.h>
-
-// Encoder control library
-#include <my_libs/encoder_control/encoder_control.h>
-
-// PWM library
-#include <my_libs/pwm/pwm_by_ledc.h>
-
-// Random PWM library
-#include <my_libs/random_pwm_setup/random_pwm_setup.h>
-
-// I2C display library
-#include "esp_log.h"
-#include <outer_libs/I2C_display/ssd1306.h> // https://github.com/baoshi/ESP-I2C-OLED
-#include <outer_libs/I2C_display/fonts.h>
-
-
-// FreeRTOS or bare metal choose
-#define USE_FREERTOS 0 // 0 for bare metal or 1 for RTOS
-
-#define MY_BUT_VCC_1 GPIO_NUM_4
-
-
-#if USE_FREERTOS
-
-    #include "freertos/FreeRTOS.h"
-    #include "freertos/task.h"
-
-#endif
-// INCLUDES END
-
-
-// DEFINES:
-
-
-// VARIABLES
-
-button_ctx my_but_1;
-
-
-// Button flags
-bool but_1_onetime_press = false;
-bool but_1_longtime_press = false;
-
-
-// Display variables
-char display_buf[32]; // Буфер для форматирования текста
-// Display variables
-
-
-// VARIABLES END
-
-
-// FUNCTIONS DECLARATIONS:
-void initialization();
-
-void main_loop(void *pvParameter);
-
-void update_display_but_onetime();
-void update_display_but_longtime();
-void update_display_but_no_press();
-
-// FUNCTIONS DECLARATIONS END
-
-
-// SETUP:
-void initialization()
-{
-    // Button read ctx
-    my_but_1 = button_initialization(MY_BUT_VCC_1, GPIO_PULLUP_ONLY, NO_FIX);
-
-    if (ssd1306_init(0, 22, 21))
-    {
-        ESP_LOGI("OLED", "oled inited");
-
-        ssd1306_clear(0);
-
-        ssd1306_draw_rectangle(0, 10, 30, 20, 20, SSD1306_COLOR_WHITE);
-        ssd1306_select_font(0, 0);
-        ssd1306_draw_string(0, 0, 0, "glcd_5x7_font_info", SSD1306_COLOR_WHITE, SSD1306_COLOR_BLACK);
-        ssd1306_select_font(0, 1);
-        ssd1306_draw_string(0, 0, 18, "tahoma_8pt_font_info", SSD1306_COLOR_WHITE, SSD1306_COLOR_BLACK);
-        ssd1306_draw_string(0, 55, 30, "Hello ESP32!", SSD1306_COLOR_WHITE, SSD1306_COLOR_BLACK);
-
-        ssd1306_refresh(0, true);
-    }
-    else
-    {
-        ESP_LOGE("OLED", "oled init failed");
-    }
-}
-// SETUP END
-
-
-// MAIN LOOP:
-void main_loop(void *pvParameter)
-{
-    while (1)
-    {
-        // LOOP:
-
-        flag_control_by_but_onetime_press(&my_but_1, &but_1_onetime_press);
-
-        flag_control_by_but_longtime_press(&my_but_1, &but_1_longtime_press);
-
-
-        if (but_1_onetime_press) 
-        {   
-            update_display_but_onetime();
-        }
-
-        else if (but_1_longtime_press) 
-        {
-            but_1_onetime_press = false;
-
-            update_display_but_longtime();
-        }
-        else if (!but_1_longtime_press && !but_1_onetime_press) 
-        {
-            update_display_but_no_press();
-        }
-    
-        // LOOP END
-
-        // Delay for correct loop
-        #if USE_FREERTOS
-            // vTaskDelay(pdMS_TO_TICKS(RTOS_LOOP_DELAY_MS));
-        #else
-            // esp_rom_delay_us(1000);
-
-            await(1, TIME_UNIT_US); // Ending_await
-        #endif
-    }
-}
-// MAIN LOOP END
-
-
-// MAIN:
-void app_main()
-{
-    // UART setup for serial monitor 
-
-    // INITIALIZATION:
-    initialization();
-    // INITIALIZATION END
-
-    // PRE-CYCLE:
-
-    // PRE-CYCLE END
-
-    // CYCLE:
-    #if USE_FREERTOS
-        xTaskCreate(main_loop, "Main Loop", 2048, NULL, 5, NULL);
-    #else
-        main_loop(NULL);
-    #endif
-    // CYCLE END
-}
-// MAIN END
-
-
-// FUNCTIONS DEFINITIONS:
-
-
-// Display update
-void update_display_but_no_press()
-{
-    ssd1306_clear(0);
-
-    ssd1306_select_font(0, 1);
-
-    snprintf(display_buf, sizeof(display_buf), "Button ain't pressed!");
-    ssd1306_draw_string(0, 0, 0, display_buf, SSD1306_COLOR_WHITE, SSD1306_COLOR_BLACK);
-
-    snprintf(display_buf, sizeof(display_buf), "Total presses: %u", my_but_1.presses_counter);
-    ssd1306_draw_string(0, 0, 30, display_buf, SSD1306_COLOR_WHITE, SSD1306_COLOR_BLACK);
-
-    ssd1306_refresh(0, true);
-}
-
-
-void update_display_but_onetime()
-{
-    ssd1306_clear(0);
-
-    ssd1306_select_font(0, 1);
-
-    snprintf(display_buf, sizeof(display_buf), "Button pressed by onetime!");
-    ssd1306_draw_string(0, 0, 0, display_buf, SSD1306_COLOR_WHITE, SSD1306_COLOR_BLACK);
-
-    snprintf(display_buf, sizeof(display_buf), "Total presses: %u", my_but_1.presses_counter);
-    ssd1306_draw_string(0, 0, 30, display_buf, SSD1306_COLOR_WHITE, SSD1306_COLOR_BLACK);
-
-    ssd1306_refresh(0, true);
-}
-
-
-void update_display_but_longtime()
-{
-    ssd1306_clear(0);
-
-    ssd1306_select_font(0, 1);
-
-    snprintf(display_buf, sizeof(display_buf), "Button pressed by longtime!");
-    ssd1306_draw_string(0, 0, 0, display_buf, SSD1306_COLOR_WHITE, SSD1306_COLOR_BLACK);
-
-    snprintf(display_buf, sizeof(display_buf), "Total presses: %u", my_but_1.presses_counter);
-    ssd1306_draw_string(0, 0, 30, display_buf, SSD1306_COLOR_WHITE, SSD1306_COLOR_BLACK);
-
-    ssd1306_refresh(0, true);
-}
-
-// FUNCTIONS DEFINITIONS END
-
-*/
-
-// =========================================================================================== LED CONTROL BY BUTTON PRESSES
-
-// =========================================================================================== USING EXAMPLES SECTION
