@@ -95,7 +95,6 @@ if (long_pressed_logic_flag)
 
 ⚠️ Known limitations:
 
-  * Debugging required for simultaneous processing of different press types
   * Error handling and callbacks need further implementation
   * Some edge cases in fast repeated presses not fully covered
 
@@ -105,8 +104,7 @@ if (long_pressed_logic_flag)
 
   * Finalize callback system for short and long presses
   * Improve error handling and reporting
-  * Enhance multi-button support with overlapping press types
-  * Maintain full async compatibility with async_await
+
 
 
 
