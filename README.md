@@ -26,7 +26,7 @@ A lightweight button management library for embedded systems (ESP32, STM32, Ardu
 
 ⚠️ BIG WARNING ⚠️
 
-You must download and link the async_await library from "https://github.com/dimakomplekt/async_await",
+You must download and link the async_await library from [here](https://github.com/dimakomplekt/async_await),
 because the button library relies on its timing engine for asynchronous debouncing!
 
 ⚠️ BIG WARNING ⚠️
