@@ -8,6 +8,15 @@
 
 // =========================================================================================== HELPER-FUNCTIONS
 
+// =========================================================================================== DECLARATIONS
+
+void flag_control_by_but_multiple_press_inside(button_ctx *button, bool* flag, uint8_t presses_quantity);
+
+// =========================================================================================== DECLARATIONS
+
+
+// =========================================================================================== REALIZATIONS
+
 // Fast read command function
 // (ordinary low-code read for ESP32 without many tests)
 static inline int fast_but_gpio_read(button_ctx *button)
@@ -30,6 +39,8 @@ static inline int fast_but_gpio_read(button_ctx *button)
         default: return raw_level;
     }
 }
+
+// =========================================================================================== REALIZATIONS
 
 // =========================================================================================== HELPER-FUNCTIONS
 
@@ -85,10 +96,10 @@ button_ctx button_initialization(gpio_num_t PIN, gpio_pull_mode_t pull_mode, but
     new_button.but_long_pressed = false;
     new_button.but_snapshot = false;
 
-    new_button.one_time_block = false;
     new_button.mt_permission = true;
 
     new_button.long_time_await_end = true;
+    new_button.one_time_await_end = true;
 
     new_button.presses_counter = 0;
     new_button.max_presses_quantity = 1;
@@ -125,7 +136,9 @@ button_ctx button_initialization(gpio_num_t PIN, gpio_pull_mode_t pull_mode, but
 }
 
 
+
 // =========================================================================================== Button control APIs realization
+
 
 // =========================================================================================== Helper-functions for button error handling
 
@@ -171,6 +184,7 @@ bool button_type_check(button_ctx *button, button_type expected_type)
 
 // =========================================================================================== Flags control
 
+
 // Switch the flag value by the short BUT press (flag holds the switched value, until the BUT pressed
 // once again)
 void flag_control_by_but_onetime_press(button_ctx *button, bool* flag)
@@ -207,102 +221,38 @@ void flag_control_by_but_onetime_press(button_ctx *button, bool* flag)
     int but_level = fast_but_gpio_read(button);
 
     if (!button->but_pressed && but_level)
-    {
-        button->one_time_block = false; // Reset the timers for longtime check
-        
+    {        
         // Flag switch after debounce
         if (async_await(&button->DEBOUNCE_AWAIT, 3, TIME_UNIT_MS, false))
         {
+            // Reset block flags after the new press
+            button->one_time_await_end = false;
+            button->long_time_await_end = false;
+
             button->but_pressed = true;
-            button->mt_permission = true; // Reset by the press if earlier flag blocked by long time press
+
+            end_await(&button->DEBOUNCE_AWAIT);
         }
     }
-    // Reset for the next press if but was pressed, mt_permission was obtained
+    // Reset for the next press if but was pressed
     // and user don't hold the button no more.
-    else if (button->but_pressed && button->mt_permission && !button->one_time_block && !but_level)
+    if (button->but_pressed && !button->long_time_await_end && !but_level)
     {
         *flag = !*flag; // Change the flag
-        end_await(&button->DEBOUNCE_AWAIT); // Stop await
-        end_await(&button->LONG_TIME_PRESS_AWAIT);
         
-        button->but_pressed = false; // Reset for the next call
-        button->one_time_block = true;
-    }
-}
+        // Block the longtime press flag switch after onetime press
+        button->one_time_await_end = true;
 
-
-// Switch the flag value by the several BUT presses (flag holds the switched value, until the BUT pressed
-// several times once again)
-void flag_control_by_but_multiple_press_inside(button_ctx *button, bool* flag, uint8_t presses_quantity)
-{
-    // Logic error handler
-    if (presses_quantity < 1) return;
-
-    // Update the maximum presses quantity value
-    if (presses_quantity > button->max_presses_quantity) button->max_presses_quantity = presses_quantity;
-
-
-    // BUT state read
-    int but_level = fast_but_gpio_read(button);
-
-    // One time press check
-    if (!button->but_pressed && but_level)
-    {
-        // Flag switch after debounce
-        if (async_await(&button->DEBOUNCE_AWAIT, 3, TIME_UNIT_MS, false))
-        {
-            button->mt_permission = true;
-
-            button->but_pressed = true; // Exit from this if-condition, until the next but press
-
-            reboot_await(&button->MULTIPRESS_AWAIT, 1, TIME_UNIT_S); // Reboot the multipress await
-        }
-    }
-    
-    if (button->but_pressed && !but_level)
-    {
-        button->presses_counter += 1; // Increment the presses counter
-        button->but_pressed = false; // Set the permission for the next press
-
+        // Stop awaits
         end_await(&button->DEBOUNCE_AWAIT);
-        end_await(&button->MULTIPRESS_AWAIT);
         end_await(&button->LONG_TIME_PRESS_AWAIT);
     }
-    
-    // Start multipress await only if the presses counter > 0
-    if (button->presses_counter > 0 && button->mt_permission && !button->but_pressed)
+
+    if (button->one_time_await_end)
     {
-        async_await(&button->MULTIPRESS_AWAIT, 1, TIME_UNIT_S, true);
-
-        if (button->MULTIPRESS_AWAIT.end_flag)
-        {
-            if (button->presses_counter == presses_quantity)
-            {     
-                *flag = !*flag; // Reverse the flag if the timer ends up
-
-                // ensure all related awaits are stopped
-                end_await(&button->DEBOUNCE_AWAIT);
-                end_await(&button->LONG_TIME_PRESS_AWAIT);
-                end_await(&button->MULTIPRESS_AWAIT);
-
-                button->presses_counter = 0;
-            }
-            if (button->presses_counter > button->max_presses_quantity)
-            {     
-                // stop awaits when aborting multipress sequence
-                end_await(&button->DEBOUNCE_AWAIT);
-                end_await(&button->LONG_TIME_PRESS_AWAIT);
-                end_await(&button->MULTIPRESS_AWAIT);
-
-                button->presses_counter = 0;
-            }
-        }
-    }
-
-    if (!button->mt_permission && button->long_time_await_end)
-    {
-        button->presses_counter = 0;
-        end_await(&button->MULTIPRESS_AWAIT);
+        // Reset ctx flags for the next call
+        button->but_pressed = false;
+        button->but_long_pressed = false;
     }
 }
 
@@ -336,10 +286,12 @@ void flag_control_by_but_multiple_press(button_ctx *button, bool* flag, uint8_t 
     }
     
 
-    // Проверяем, подходит ли текущее количество нажатий под заданное условие
+    // Check if the current presses counter value is valid for the requested presses quantity
+    // This algorithm calls the inside function (and the main multipress flag switch logic) only for current press_quantity
+    // This allows to call several multipress flag controls with different press quantities on the same button
     bool valid_press_count = false;
 
-    if (presses_quantity == 1 && button->presses_counter <= 1)
+    if (presses_quantity == 1 && button->presses_counter == 0)
         valid_press_count = true;
 
     else if (button->presses_counter == presses_quantity)
@@ -347,6 +299,102 @@ void flag_control_by_but_multiple_press(button_ctx *button, bool* flag, uint8_t 
 
     if (valid_press_count)
         flag_control_by_but_multiple_press_inside(button, flag, presses_quantity);
+}
+
+
+
+// Switch the flag value by the several BUT presses (flag holds the switched value, until the BUT pressed
+// several times once again)
+void flag_control_by_but_multiple_press_inside(button_ctx *button, bool* flag, uint8_t presses_quantity)
+{
+    // Logic error handler
+    if (presses_quantity < 1) return;
+
+    // Update the maximum presses quantity value
+    if (presses_quantity > button->max_presses_quantity) button->max_presses_quantity = presses_quantity;
+
+
+    // BUT state read
+    int but_level = fast_but_gpio_read(button);
+
+    // One time press check
+    if (!button->but_pressed && but_level)
+    {
+        // Flag switch after debounce
+        if (async_await(&button->DEBOUNCE_AWAIT, 3, TIME_UNIT_MS, false))
+        {
+            // Reset block flags after the new press
+            button->multipress_await_end = false;
+            button->long_time_await_end = false;
+
+            button->but_pressed = true; // Exit from this if-condition, until the next but press
+
+            reboot_await(&button->MULTIPRESS_AWAIT, 1, TIME_UNIT_S); // Reboot the multipress await
+
+            end_await(&button->DEBOUNCE_AWAIT);
+        }
+    }
+    
+    if (button->but_pressed && !but_level)
+    {
+        button->presses_counter += 1; // Increment the presses counter
+        button->but_pressed = false; // Set the permission for the next press
+
+        end_await(&button->MULTIPRESS_AWAIT);
+        end_await(&button->LONG_TIME_PRESS_AWAIT);
+    }
+    
+    // Start multipress await only if the presses counter > 0
+    if (button->presses_counter > 0 && !button->but_pressed && !button->long_time_await_end)
+    {
+        async_await(&button->MULTIPRESS_AWAIT, 1, TIME_UNIT_S, true);
+
+        // If the multipress timer ends up
+        if (button->MULTIPRESS_AWAIT.end_flag)
+        {
+            button->multipress_await_end = true;
+
+            // Press quanity coincidence case
+            if (button->presses_counter == presses_quantity)
+            {     
+                *flag = !*flag; // Reverse the flag, choosen for the presses quantity
+
+                // Stop awaits
+                end_await(&button->LONG_TIME_PRESS_AWAIT);
+                end_await(&button->MULTIPRESS_AWAIT);
+
+                button->presses_counter = 0;
+            }
+            // Overflow protection
+            if (button->presses_counter > button->max_presses_quantity)
+            {     
+                // stop awaits when aborting multipress sequence
+                end_await(&button->LONG_TIME_PRESS_AWAIT);
+                end_await(&button->MULTIPRESS_AWAIT);
+
+                button->presses_counter = 0;
+            }
+
+            // Else - no actions
+        }
+    }
+
+    // Reset by the longtime press block
+    if (button->long_time_await_end)
+    {
+        button->presses_counter = 0;
+        end_await(&button->MULTIPRESS_AWAIT);
+    }
+
+    // Reset for the next press if multipress ends and user don't hold the button no more.
+    else if (button->multipress_await_end)
+    {
+        button->but_pressed = false;
+        button->but_long_pressed = false;
+
+        button->one_time_await_end = false;
+        button->multipress_await_end = false;
+    }
 }
 
 
@@ -373,57 +421,68 @@ void flag_control_by_but_longtime_press(button_ctx *button, bool* flag)
         assert(0);
     }
 
+
     // BUT state
     int but_level = fast_but_gpio_read(button);
+
 
     if (!button->but_long_pressed && but_level)
     {
         // Flag switch after debounce
         if (async_await(&button->DEBOUNCE_AWAIT, 3, TIME_UNIT_MS, false))
         {   
+            // Reset block flags after the new press
+            button->one_time_await_end = false;
+            button->multipress_await_end = false;
+            button->long_time_await_end = false;
+
             button->but_long_pressed = true;
+
+            end_await(&button->DEBOUNCE_AWAIT);
         }
     }
     // If we got the debounce flag and button still pressed
     else if (button->but_long_pressed && but_level)
     {   
-        button->one_time_block = false; // Reset the timers for longtime check
-        button->mt_permission = false; // Block the one time press logic
+        // Long press already handled, do nothing until button release
+        if (button->long_time_await_end) return;
+
+        // Additional await reboot for the instant repeat blocking
+        if (!button->LONG_TIME_PRESS_AWAIT.initialization_status) reboot_await(&button->LONG_TIME_PRESS_AWAIT, 3, TIME_UNIT_S);
 
         // Wait 3 seconds
+        // Makes &button->LONG_TIME_PRESS_AWAIT.initialization_status equal to true by the first call and blocks upper function calls in loop
+        // until the await ends up
         if (async_await(&button->LONG_TIME_PRESS_AWAIT, 3, TIME_UNIT_S, false))
         {
-            if (!button->one_time_block) *flag = !*flag; // Flag switch
+            if (!button->one_time_await_end && !button->multipress_await_end)
+            {
+                *flag = !*flag; // Flag switch
 
-            // stop other awaits that might interfere
-            end_await(&button->DEBOUNCE_AWAIT);
-            end_await(&button->MULTIPRESS_AWAIT);
+                // Block the onetime press and multipress press flag switch after longtime press end
+                button->long_time_await_end = true;
 
-            button->long_time_await_end = true;
-            button->one_time_block = true;
+                // Stop awaits 
+                end_await(&button->MULTIPRESS_AWAIT);
+                end_await(&button->LONG_TIME_PRESS_AWAIT); // Makes &button->LONG_TIME_PRESS_AWAIT.initialization_status equal to false
+            }
         }
     }
+
+    // Block the onetime and multipress press flag switch after longtime press end with button still pressed
     if (button->long_time_await_end && but_level)
     {
-        button->but_long_pressed = false;
-
-        end_await(&button->LONG_TIME_PRESS_AWAIT);
-        end_await(&button->DEBOUNCE_AWAIT);
+        button->one_time_await_end = false;
+        button->multipress_await_end = false;
     }
 
     // Reset for the next press if button was pressed and user don't hold the button no more.
-    if (button->long_time_await_end && !but_level)
+    else if (button->long_time_await_end && !but_level)
     {
-        button->mt_permission = false;
-        button->long_time_await_end = false;
-    }  
-    else if (!button->long_time_await_end && !but_level)
-    {
-        button->mt_permission = true;
-        button->long_time_await_end = false;
-    }  
+        button->but_pressed = false;
+        button->but_long_pressed = false;
+    }
 }
-
 
 
 // Switch the flag value by the infinite BUT press (flag holds the switched value, until the BUT pressed, 
@@ -485,7 +544,6 @@ void flag_control_by_but_infinite_press(button_ctx *button, bool* flag)
         {
             *flag = !*flag; // Flag one time switch
             button->but_pressed = true;
-            button->mt_permission = false;
         }
     }
     // Reset for the next press if button was pressed and user don't hold the button no more.
@@ -502,9 +560,12 @@ void flag_control_by_but_infinite_press(button_ctx *button, bool* flag)
     }  
 }
 
+
 // =========================================================================================== Flags control
 
 // =========================================================================================== Callbacks control
+
+/*
 
 // Call the callback function by the short BUT press with specified repeats quantity 
 void callback_control_by_but_onetime_press(button_ctx *button, unsigned int repeats)
@@ -520,7 +581,7 @@ void callback_control_by_but_onetime_press(button_ctx *button, unsigned int repe
 
     if (!button->but_pressed && but_level)
     {
-        button->one_time_block = false; // Reset the timers for longtime check
+        // button->one_time_block = false; // Reset the timers for longtime check
 
         // Callback after debounce
         if (async_await(&button->DEBOUNCE_AWAIT, 3, TIME_UNIT_MS, false))
@@ -547,7 +608,7 @@ void callback_control_by_but_onetime_press(button_ctx *button, unsigned int repe
         end_await(&button->LONG_TIME_PRESS_AWAIT);
 
         button->but_pressed = false; // Reset for the next call
-        button->one_time_block = true;
+        // button->one_time_block = true;
     }
 }
 
@@ -660,7 +721,7 @@ void callback_control_by_but_longtime_press(button_ctx *button, unsigned int rep
     // If we got the debounce flag and button still pressed
     else if (button->but_long_pressed && but_level)
     {
-        button->one_time_block = false; // Reset the timers for longtime check
+        // button->one_time_block = false; // Reset the timers for longtime check
         button->mt_permission = false; // Block the one time press logic
 
         // Wait LONG press time
@@ -668,7 +729,7 @@ void callback_control_by_but_longtime_press(button_ctx *button, unsigned int rep
         {
             button->long_time_press_permission = true;
             button->long_time_await_end = true;
-            button->one_time_block = true;
+            // button->one_time_block = true;
         }
     }
 
@@ -754,7 +815,7 @@ void callback_control_by_but_infinite_press(button_ctx *button, unsigned int rep
             else
                 button->infinite_press_callback();
 
-            // Stop awaits that were used to detect and allow infinite action
+            // stop awaits that were used to detect and allow infinite action
             end_await(&button->LONG_TIME_PRESS_AWAIT);
             end_await(&button->DEBOUNCE_AWAIT);
 
@@ -772,6 +833,8 @@ void callback_control_by_but_infinite_press(button_ctx *button, unsigned int rep
         button->but_pressed = false;
     }
 }
+
+*/
 
 // =========================================================================================== Callbacks control
 
