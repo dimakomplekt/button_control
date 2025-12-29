@@ -95,9 +95,10 @@ typedef struct
     bool but_long_pressed;                          // Flag for button press state control
     bool but_snapshot;                              // Flag for button long-time pressing control
 
-    bool one_time_block;                            // Flag for longtime-time press block from onetime press 
+    bool multipress_await_end;                            // Flag for longtime-time press block from onetime press 
     bool mt_permission;                             // Flag for one-time press block from longtime press  
 
+    bool one_time_await_end;
     bool long_time_await_end;
 
     unsigned int presses_counter;                   // Variable for presses quantity control
