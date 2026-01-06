@@ -51,14 +51,16 @@ Main API for initialization looks like:
 ```c
 #include <my_libs/button_control/button_contol.h>
 
-// Button context
-button_ctx my_button;
-
 // Pin definition
 #define BTN_PIN GPIO_NUM_0
 
+
+// Button context
+button_ctx my_button;
+
 // Initialize button with internal pullup and no fix
 my_button = button_initialization(BTN_PIN, GPIO_PULLUP_ONLY, NO_FIX);
+
 
 // Controlled flags 
 bool short_pressed_logic_flag = false;
@@ -76,6 +78,7 @@ if (short_pressed_logic_flag)
     // Your logic
     short_pressed_logic_flag = false;
 }
+
 
 // Long press detection
 flag_control_by_but_longtime_press(&my_button, &long_pressed_logic_flag);
