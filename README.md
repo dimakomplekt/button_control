@@ -57,7 +57,6 @@ Main API for initialization looks like:
 
 // Button context
 button_ctx my_button;
-
 // Initialize button with internal pullup and no fix
 my_button = button_initialization(BTN_PIN, GPIO_PULLUP_ONLY, NO_FIX);
 
